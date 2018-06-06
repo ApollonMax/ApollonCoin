@@ -1,3 +1,12 @@
 .vscode/settings.json
 .vscode/settings.json
 .vscode/settings.json
+*.qm
+build/*
+release/*
+Makefile
+Makefile.Debug
+Makefile.Release
+object_script.*
+src/.vscode/*
+apollon-qt_plugin*

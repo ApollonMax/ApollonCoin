@@ -1446,8 +1446,9 @@ const CBlockIndex* GetLastBlockIndex(const CBlockIndex* pindex, bool fProofOfSta
 
 static const int TARGET_DIFF_UPDATE_START = HARD_FORK_BLOCKRDB;
 
-static int64_t nTargetTimespan = 48 * 60;  // 48 mins
+static int64_t nTargetTimespan = 10 * 60; // 10 mins
 static int64_t nTargetTimespanV2 =  96 * 60;  // 96 mins
+static int64_t nTargetTimespanV3 =  30 * 60;  // 30 mins
 
 unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfStake)
 {
@@ -1456,12 +1457,6 @@ unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfS
         nTargetTemp = TARGET_SPACING3;
 	else if (pindexLast->nTime > FORK_TIME)
 		nTargetTemp = TARGET_SPACING2;
-
-	if(pindexLast->GetBlockTime() > STAKE_TIMESPAN_SWITCH_TIME)
-	nTargetTimespan = 2 * 60; // 2 minutes
-
-	if(pindexLast->GetBlockTime() > STAKE_TIMESPAN_SWITCH_TIME1)
-	nTargetTimespan = 10 * 60; // 10 minutes
 
     CBigNum bnTargetLimit = fProofOfStake ? GetProofOfStakeLimit(pindexLast->nHeight) : Params().ProofOfWorkLimit();
 
@@ -1491,9 +1486,7 @@ unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfS
         int64_t nInterval = nTargetTimespan / nTargetTemp;
         bnNew *= ((nInterval - 1) * nTargetTemp + nActualSpacing + nActualSpacing);
         bnNew /= ((nInterval + 1) * nTargetTemp);
-        }
-    else
-    {
+    } else {
         // In this version, it is OK if nActualSpacing is negative
         // We'll still put some reasonable bounds on it just in case
 
@@ -1504,20 +1497,43 @@ unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfS
         // First time, bnNew is adjusted by (660 - 60 + 2400) / (60 - 660 + 2400) = 3000 / 1800
         // Next time, nActualSpacing is now -540 (120 - 660), bnNew is adjusted by (-540 - 60 + 2400) / (60 + 540 + 2400) = 1800 / 3000
         // The net product is 1 -- effectively canceling each other out.
-        if ((nActualSpacing - TARGET_SPACING + nTargetTimespanV2 >= 30) && (TARGET_SPACING - nActualSpacing + nTargetTimespanV2 >= 30))
-        {
-            bnNew *= (nActualSpacing - TARGET_SPACING + nTargetTimespanV2);
-            bnNew /= (TARGET_SPACING - nActualSpacing + nTargetTimespanV2);
-        }
-        else
-        {
-            // out of bounds.  Do not change difficulty
+        
+        // stuck fix: use TARGET_SPACING to keep the 290 blocks since the original fork valid
+        if (nHeight <= 155307) {
+            if ((nActualSpacing - TARGET_SPACING + nTargetTimespanV2 >= 30) && (TARGET_SPACING - nActualSpacing + nTargetTimespanV2 >= 30))
+            {
+                bnNew *= (nActualSpacing - TARGET_SPACING + nTargetTimespanV2);
+                bnNew /= (TARGET_SPACING - nActualSpacing + nTargetTimespanV2);
+            }
+            else{
+            }
+        } else {
+            // fix for the stuck chain:
+            // nTargetTemp = 53 sec, starting with blk 160000 it will become 90
+            if ((nActualSpacing - nTargetTemp + nTargetTimespanV3 >= 120) && (nTargetTemp - nActualSpacing + nTargetTimespanV3 >= 120)) {
+                bnNew *= (nActualSpacing - nTargetTemp + nTargetTimespanV3);
+                bnNew /= (nTargetTemp - nActualSpacing + nTargetTimespanV3);
+            } else {
+                // Out of bounds. Check for extreme conditions
+                if (nActualSpacing - nTargetTemp + nTargetTimespanV3 < 120) {
+                    // went backwards in time by an extreme amount
+                    // Obvious hack, don't adjust difficulty
+                }
+                if (nTargetTemp - nActualSpacing + nTargetTimespanV3 < 120) {
+                    // Extremely long block time
+                    // Could follow a backwards hack or be real
+                    // Best to cut the difficulty by 20% to be safe
+                    bnNew *= 5;
+                    bnNew /= 4;
+                }
+            }
         }
     }
 
     if (bnNew <= 0 || bnNew > bnTargetLimit)
         bnNew = bnTargetLimit;
 
+    LogPrintf("targetLimit: %d\n", bnTargetLimit.GetCompact());
     return bnNew.GetCompact();
 }
 
@@ -2695,6 +2711,7 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
         if(MasternodePayments)
         {
         LOCK2(cs_main, mempool.cs);
+
         CBlockIndex *pindex = pindexBest;
         if(IsProofOfStake() && pindex != NULL){
             if(pindex->GetBlockHash() == hashPrevBlock){
@@ -2709,83 +2726,27 @@ bool CBlock::CheckBlock(bool fCheckPOW, bool fCheckMerkleRoot, bool fCheckSig) c
                 bool foundPaymentAndPayee = false;
 
                 CScript payee;
-                    string targetNode;
                 CTxIn vin;
-                    
-					CScript payeerewardaddress = CScript();
-					int payeerewardpercent = 0;
-					bool hasPayment = true;
-			
                 if(!masternodePayments.GetBlockPayee(pindexBest->nHeight+1, payee, vin)) {
-						CMasternode* winningNode = mnodeman.GetCurrentMasterNode(1);
-						if(winningNode){
-							payee = GetScriptForDestination(winningNode->pubkey.GetID());
-							payeerewardaddress = winningNode->rewardAddress;
-							payeerewardpercent = winningNode->rewardPercentage;
-					   
-						// If reward percent is 0 then send all to masternode address
-						if(hasPayment && payeerewardpercent == 0){
-							CTxDestination address1;
-							ExtractDestination(payee, address1);
-							CApolloncoinAddress address2(address1);
-							targetNode = address2.ToString().c_str();	
-						}
-
-						// If reward percent is 100 then send all to reward address
-						if(hasPayment && payeerewardpercent == 100){
-							CTxDestination address1;
-							ExtractDestination(payeerewardaddress, address1);
-							CApolloncoinAddress address2(address1);
-							targetNode = address2.ToString().c_str();
-							
-						}
-
-						// If reward percent more than 0 and lower than 100 then split reward
-						if(hasPayment && payeerewardpercent > 0 && payeerewardpercent < 100){
-							CTxDestination address1;
-							ExtractDestination(payee, address1);
-							CApolloncoinAddress address2(address1);
-							
-							CTxDestination address3;
-							ExtractDestination(payeerewardaddress, address3);
-							CApolloncoinAddress address4(address3);
-							targetNode = address2.ToString().c_str();
-							
-						}
-						LogPrintf("Detected Masternode payment to %s\n", targetNode);	
-						} else {
-							LogPrintf("Cant calculate Winner, so passing.");                        
+                    foundPayee = true;
                     foundPaymentAmount = true;
-                            foundPayee = true;
                     foundPaymentAndPayee = true;
+                    if(fDebug) { LogPrintf("CheckBlock() : Using non-specific masternode payments %d\n", pindexBest->nHeight+1); }
                 }
-                    }
-
 
                 for (unsigned int i = 0; i < vtx[1].vout.size(); i++) {
-						
                     payee = vtx[1].vout[i].scriptPubKey;
-						
-						CTxDestination address1;
-						ExtractDestination(vtx[1].vout[i].scriptPubKey, address1);
-						CApolloncoinAddress address2(address1);                        
                     if(vtx[1].vout[i].nValue == masternodePaymentAmount )
                         foundPaymentAmount = true;
-						if(address2.ToString().c_str() == targetNode)                            
+                        if(vtx[1].vout[i].scriptPubKey == payee )
                         foundPayee = true;
-						if(vtx[1].vout[i].nValue == masternodePaymentAmount && address2.ToString().c_str() == targetNode)
+                        if(vtx[1].vout[i].nValue == masternodePaymentAmount && vtx[1].vout[i].scriptPubKey == payee)
                         foundPaymentAndPayee = true;
                 }
-
 
                 CTxDestination address1;
                 ExtractDestination(payee, address1);
                 CApolloncoinAddress address2(address1);
-					if (pindexBest->nHeight+1 < 250000) { // TODO: remove magic number; use in one place
-						foundPaymentAmount = true;
-						foundPayee = true;
-						foundPaymentAndPayee = true;
-					}
 
                 if(!foundPaymentAndPayee) {
                     if(fDebug) { LogPrintf("CheckBlock() : Couldn't find masternode payment(%d|%d) or payee(%d|%s) nHeight %d. \n", foundPaymentAmount, masternodePaymentAmount, foundPayee, address2.ToString().c_str(), pindexBest->nHeight+1); }
