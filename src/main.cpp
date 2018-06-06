@@ -1499,7 +1499,7 @@ unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfS
         // The net product is 1 -- effectively canceling each other out.
         
         // stuck fix: use TARGET_SPACING to keep the 290 blocks since the original fork valid
-        if (nHeight <= 155307) {
+        if (nHeight <= 155335) {
             if ((nActualSpacing - TARGET_SPACING + nTargetTimespanV2 >= 30) && (TARGET_SPACING - nActualSpacing + nTargetTimespanV2 >= 30))
             {
                 bnNew *= (nActualSpacing - TARGET_SPACING + nTargetTimespanV2);
